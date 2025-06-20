@@ -1,0 +1,129 @@
+networks:
+  redisn:
+    driver: bridge
+
+services:
+  map-scraper:
+    build: ./map-scraper
+    container_name: map_scraper_waze
+    networks:
+      - redisn
+    volumes:
+      - ./map-scraper:/app
+
+  mongo:
+    build: ./bdd
+    container_name: mongo_waze
+    ports:
+      - "27017:27017"
+    volumes:
+      - ./data:/data
+    environment:
+      - MONGO_INITDB_ROOT_USERNAME=admin
+      - MONGO_INITDB_ROOT_PASSWORD=admin123
+    networks:
+      - redisn
+    healthcheck:
+      test: ["CMD", "mongo", "--eval", "db.adminCommand('ping')"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  mongo-express:
+    image: mongo-express
+    container_name: mongo_express_waze
+    restart: always
+    ports:
+      - "8081:8081"
+    environment:
+      - ME_CONFIG_MONGODB_ADMINUSERNAME=admin
+      - ME_CONFIG_MONGODB_ADMINPASSWORD=admin123
+      - ME_CONFIG_MONGODB_SERVER=mongo
+    networks:
+      - redisn
+    depends_on:
+      - mongo
+
+  mongo-exporter:
+    build: ./mongo-exporter
+    container_name: mongo_exporter
+    networks:
+      - redisn
+    depends_on:
+      - mongo
+    volumes:
+      - ./data:/data
+    environment:
+      - MONGO_HOST=mongo
+      - MONGO_DB=waze_db
+      - MONGO_COLLECTION=alertas
+      - MONGO_USER=admin
+      - MONGO_PASS=admin123
+
+  hadoop-pig:
+    build: ./hadoop-pig
+    container_name: hadoop_pig_waze
+    networks:
+      - redisn
+    volumes:
+      - ./data:/data
+      - ./hadoop-pig/scripts:/scripts
+    stdin_open: true
+    tty: true
+    depends_on:
+      - mongo-exporter
+    command: ["/entrypoint.sh"]
+    ports:
+      - "8088:8088"
+      - "50070:50070"
+      - "9000:9000"
+      - "19888:19888"
+  redis:
+    image: bitnami/redis:latest
+    restart: always
+    container_name: redis_waze
+    environment:
+      - ALLOW_EMPTY_PASSWORD=yes
+      - REDIS_EXTRA_FLAGS=--maxmemory 2mb --maxmemory-policy allkeys-random # Configuración de Redis para limitar el uso de memoria
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data_1:/bitnami/redis/data # Volumen para persistencia de Redis
+    networks:
+      - redisn
+    depends_on:
+      - mongo # Asegura que MongoDB esté listo antes de iniciar Redis
+      - map-scraper
+  redisinsight:
+    image: redislabs/redisinsight:latest
+    restart: always
+    container_name: redisinsight_waze
+    volumes:
+      - redis-insight:/data
+    ports:
+      - "5540:5540"
+    networks:
+      - redisn
+    depends_on:
+      - redis
+
+  # estos son los enpoint para subir cosas al cache
+  redis-cache:
+    build: ./redis-cache
+    container_name: redis_cache_waze
+    restart: always
+    ports:
+      - "5000:5000"
+    networks:
+      - redisn
+    volumes:
+      - ./redis-cache:/app
+    depends_on:
+      - redis # Asegura que Redis esté listo antes de iniciar el cache
+      - mongo # Asegura que MongoDB esté listo antes de iniciar el cache
+      - map-scraper # Asegura que el scraper esté listo antes de iniciar el cache
+
+volumes:
+  redis_data_1: # Volumen persistente para Redis
+    driver: local
+  redis-insight: # Volumen para RedisInsight

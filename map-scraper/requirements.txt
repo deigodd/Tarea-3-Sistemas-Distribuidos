@@ -1,0 +1,5 @@
+selenium
+selenium-wire
+pyautogui
+blinker==1.4
+pymongo
