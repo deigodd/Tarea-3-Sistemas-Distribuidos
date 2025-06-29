@@ -137,5 +137,8 @@ $HADOOP_HOME/bin/hdfs dfs -cat /output/analysis_by_type_city/part-r-00000
 sleep 5
 
 # Mantener contenedor activo - esto para poder ver el output mas que nada
-echo "✓ Procesamiento completado. Contenedor activo..."
-tail -f /dev/null
+# echo "✓ Procesamiento completado. Contenedor activo..."
+# tail -f /dev/null
+
+# Finalizar el contenedor
+echo "✓ Procesamiento completado. Contenedor finalizado."
