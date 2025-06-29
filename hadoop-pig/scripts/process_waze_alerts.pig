@@ -59,3 +59,4 @@ unified = FOREACH grouped GENERATE
     MAX(homogenized.timestamp) AS last_timestamp;
 
 STORE homogenized INTO '/output/cleaned_records' USING PigStorage(',');
+STORE homogenized INTO 'file:/output/processed_data.csv' USING PigStorage(',');
