@@ -16,7 +16,7 @@ datasets = [
         "index_name": os.getenv("ES_INDEX_1", "raw_data")
     },
     {
-       "csv_path": os.getenv("CSV_PATH_2", "data/processed_data.csv/part-r-00000"),
+       "csv_path": os.getenv("CSV_PATH_2", "data/processed_data.csv/part-r-00000"), # el part-r-00000 es el archivo generado por pig
         "index_name": os.getenv("ES_INDEX_2", "processed_data")
     }
 ]

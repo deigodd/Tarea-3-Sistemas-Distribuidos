@@ -1,62 +1,77 @@
-from flask import Flask, request, jsonify
+from elasticsearch import Elasticsearch
 import redis
-from pymongo import MongoClient
-import os
-import json  # Importa json para serialización y deserialización
-from bson import ObjectId
+import json
 
-app = Flask(__name__)
-
-# Redis config
+es = Elasticsearch(['http://es01:9200'])
 redis_client = redis.Redis(host='redis', port=6379, decode_responses=True)
 
-# texto para ocupar más espacio en el cache, asi se llena más rapido
 large_text = "x" * 50_000
+INDEX_NAME = "processed_data"
 
+def consultar_y_cachear():
+    try:
+        # 1. Agregación: tipo más frecuente por ciudad
+        agg_query = {
+            "size": 0,
+            "aggs": {
+                "cities": {
+                    "terms": {"field": "city.keyword", "size": 10},
+                    "aggs": {
+                        "top_types": {
+                            "terms": {"field": "type.keyword", "size": 1}
+                        }
+                    }
+                }
+            }
+        }
 
-# Mongo config
-try:
-    mongo_client = MongoClient('mongodb://admin:admin123@mongo:27017/')
-    mongo_client.admin.command('ping')
-    print("Conexión a MongoDB exitosa.")
-except Exception as e:
-    print(f"Error al conectar con MongoDB: {e}")
-    raise
+        agg_response = es.search(index=INDEX_NAME, body=agg_query)
 
-db = mongo_client['waze_db']
-collection = db['alertas']
+        city_type_pairs = []
+        for bucket in agg_response['aggregations']['cities']['buckets']:
+            city = bucket['key']
+            if bucket['top_types']['buckets']:
+                top_type = bucket['top_types']['buckets'][0]['key']
+                city_type_pairs.append((city, top_type))
 
-# endpoint principal para obtener alertas y cachear en redis
-@app.route('/alerts', methods=['GET'])
-def get_alerts():
-    alert_id = request.args.get('id')
-    if alert_id:
-        key = f"alert:{alert_id}"
-        cached = redis_client.get(key)
+        print("🔍 Pares ciudad/tipo más frecuentes:")
+        for city, top_type in city_type_pairs:
+            print(f"  {city} → {top_type}")
 
-        if cached:
-            return jsonify({"source": "cache", "data": json.loads(cached)})
+        total = 0
 
-        try:
-            result = collection.find_one({"_id": ObjectId(alert_id)}, {"_id": 0})
-            if result:
-                result["extra_payload"] = large_text
-                redis_client.set(key, json.dumps(result))
-                return jsonify({"source": "mongo", "data": result})
-            else:
-                return jsonify({"error": "No se encontró el ID"}), 404
-        except Exception as e:
-            print(f"Error al buscar en MongoDB: {e}")
-            return jsonify({"error": str(e)}), 500
+        for city, top_type in city_type_pairs:
+            search_body = {
+                "query": {
+                    "bool": {
+                        "must": [
+                            {"term": {"city.keyword": city}},
+                            {"term": {"type.keyword": top_type}}
+                        ]
+                    }
+                },
+                "size": 100
+            }
 
-    return jsonify({"error": "Debe proporcionar 'id'"}), 400
+            result = es.search(index=INDEX_NAME, body=search_body)
 
-# endpoint para obtener todas los ids para luego en el generador de requests elegir aleatoriamente
-@app.route('/alerts/ids', methods=['GET'])
-def get_all_ids():
-    ids = collection.find({}, {"_id": 1}).limit(10000)
-    id_list = [str(doc["_id"]) for doc in ids]
-    return jsonify({"ids": id_list})
+            for hit in result['hits']['hits']:
+                doc_id = hit['_id']
+                source = hit['_source']
+                source['extra_payload'] = large_text
+
+                # 👇 Imprimir solo el primer documento antes de subir al cache
+                if total == 0:
+                    print(f"\n📦 Subiendo al cache [alert:{doc_id}]:")
+                    print(json.dumps(source, indent=2, ensure_ascii=False))  # Imprime con indentación
+
+                redis_client.set(f"alert:{doc_id}", json.dumps(source))
+                total += 1
+
+        print(f"\n✅ Total de documentos cacheados: {total}")
+
+    except Exception as e:
+        print(f"❌ Error en la consulta o cacheo: {e}")
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000)
+    consultar_y_cachear()

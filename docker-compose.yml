@@ -123,12 +123,24 @@ services:
       - redis
       - mongo
       - map-scraper
+    entrypoint: >
+      bash -c '
+        echo "Esperando a que hadoop_pig_waze finalice...";
+        while ping -c1 hadoop_pig_waze &>/dev/null; do
+          echo "hadoop_pig_waze sigue activo. Esperando...";
+          sleep 5;
+        done;
+        echo "hadoop_pig_waze ha dejado de responder. Ejecutando cache.py...";
+        exec python /app/cache.py
+      '
 
   elastic_setup:
     image: docker.elastic.co/elasticsearch/elasticsearch:${STACK_VERSION}
     volumes:
       - certs:/usr/share/elasticsearch/config/certs
     user: "0"
+    networks:
+      - redisn
     command: >
       bash -c '
         if [ x${ELASTIC_PASSWORD} == x ]; then
@@ -184,6 +196,8 @@ services:
       elastic_setup:
         condition: service_healthy
     image: docker.elastic.co/elasticsearch/elasticsearch:${STACK_VERSION}
+    networks:
+      - redisn
     labels:
       co.elastic.logs/module: elasticsearch
     volumes:
@@ -219,6 +233,8 @@ services:
       es01:
         condition: service_healthy
     image: docker.elastic.co/kibana/kibana:${STACK_VERSION}
+    networks:
+      - redisn
     labels:
       co.elastic.logs/module: kibana
     volumes:
@@ -245,6 +261,8 @@ services:
   csv_loader_elastic:
     build: ./csv-loader-elastic
     container_name: csv_loader_elastic
+    networks:
+      - redisn
     depends_on:
       - kibana
       - es01

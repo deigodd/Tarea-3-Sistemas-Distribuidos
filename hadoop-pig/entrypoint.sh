@@ -102,6 +102,13 @@ echo "🐷 Ejecutando script Pig para la filtración y homogeneización de los d
 $PIG_HOME/bin/pig -f $PIG_SCRIPT
 
 
+echo "Subiendo cleaned_records al HDFS..."
+
+$HADOOP_HOME/bin/hdfs dfs -rm -r /input/cleaned_records
+
+$HADOOP_HOME/bin/hdfs dfs -put /output/cleaned_records /input/
+
+$HADOOP_HOME/bin/hdfs dfs -ls /input/cleaned_records
 
 # Ejecutar segundo script Pig - acá es el análisis de los datos
 echo "🐷 Ejecutando el segundo script Pig para el procesamiento de los datos"
@@ -112,33 +119,33 @@ $PIG_HOME/bin/pig -f $PIG_SCRIPT2
 echo "Se inicia el cat de los outputs de Pig"
 
 echo "Resultados del primer script Pig (filtrado y homogeneización):"
-$HADOOP_HOME/bin/hdfs dfs -cat /output/cleaned_records/part-r-00000
+cat /output/cleaned_records/part-r-00000
 sleep 5
 
 echo "Resultados del segundo script Pig (análisis de datos):"
 echo "Primero el analisis por comuna"
-$HADOOP_HOME/bin/hdfs dfs -cat /output/analysis_by_city/part-r-00000
+cat /output/analysis_by_city/part-r-00000
 sleep 5
 
 echo "Ahora el analisis por hora (los dias estan en epoch)"
-$HADOOP_HOME/bin/hdfs dfs -cat /output/analysis_by_day/part-r-00000
+cat /output/analysis_by_day/part-r-00000
 sleep 5
 
 echo "Ahora el analisis por calle y comuna"
-$HADOOP_HOME/bin/hdfs dfs -cat /output/analysis_by_street_city/part-r-00000
+cat /output/analysis_by_street_city/part-r-00000
 sleep 5
 
 echo "Ahora el analisis por tipo de alerta"
-$HADOOP_HOME/bin/hdfs dfs -cat /output/analysis_by_type/part-r-00000
+cat /output/analysis_by_type/part-r-00000
 sleep 5
 
 echo "Ahora el analisis por tipo de alerta y comuna"
-$HADOOP_HOME/bin/hdfs dfs -cat /output/analysis_by_type_city/part-r-00000
+cat /output/analysis_by_type_city/part-r-00000
 sleep 5
 
 # Mantener contenedor activo - esto para poder ver el output mas que nada
 # echo "✓ Procesamiento completado. Contenedor activo..."
-# tail -f /dev/null
+# tail -f /dev/null ----> esto para mantener el contenedor activo
 
 # Finalizar el contenedor
 echo "✓ Procesamiento completado. Contenedor finalizado."
