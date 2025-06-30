@@ -68,6 +68,7 @@ services:
     volumes:
       - ./data:/data
       - ./hadoop-pig/scripts:/scripts
+      - ./data:/output
     stdin_open: true
     tty: true
     depends_on:
@@ -84,15 +85,15 @@ services:
     container_name: redis_waze
     environment:
       - ALLOW_EMPTY_PASSWORD=yes
-      - REDIS_EXTRA_FLAGS=--maxmemory 2mb --maxmemory-policy allkeys-random # Configuración de Redis para limitar el uso de memoria
+      - REDIS_EXTRA_FLAGS=--maxmemory 2mb --maxmemory-policy allkeys-random
     ports:
       - "6379:6379"
     volumes:
-      - redis_data_1:/bitnami/redis/data # Volumen para persistencia de Redis
+      - redis_data_1:/bitnami/redis/data
     networks:
       - redisn
     depends_on:
-      - mongo # Asegura que MongoDB esté listo antes de iniciar Redis
+      - mongo
       - map-scraper
   redisinsight:
     image: redislabs/redisinsight:latest
@@ -119,11 +120,177 @@ services:
     volumes:
       - ./redis-cache:/app
     depends_on:
-      - redis # Asegura que Redis esté listo antes de iniciar el cache
-      - mongo # Asegura que MongoDB esté listo antes de iniciar el cache
-      - map-scraper # Asegura que el scraper esté listo antes de iniciar el cache
+      - redis
+      - mongo
+      - map-scraper
+    entrypoint: >
+      bash -c '
+        echo "Esperando a que hadoop_pig_waze finalice...";
+        while ping -c1 hadoop_pig_waze &>/dev/null; do
+          echo "hadoop_pig_waze sigue activo. Esperando...";
+          sleep 5;
+        done;
+        echo "hadoop_pig_waze ha dejado de responder. Ejecutando cache.py...";
+        exec python /app/cache.py
+      '
+
+  elastic_setup:
+    image: docker.elastic.co/elasticsearch/elasticsearch:${STACK_VERSION}
+    volumes:
+      - certs:/usr/share/elasticsearch/config/certs
+    user: "0"
+    networks:
+      - redisn
+    command: >
+      bash -c '
+        if [ x${ELASTIC_PASSWORD} == x ]; then
+          echo "Set the ELASTIC_PASSWORD environment variable in the .env file";
+          exit 1;
+        elif [ x${KIBANA_PASSWORD} == x ]; then
+          echo "Set the KIBANA_PASSWORD environment variable in the .env file";
+          exit 1;
+        fi;
+        if [ ! -f config/certs/ca.zip ]; then
+          echo "Creating CA";
+          bin/elasticsearch-certutil ca --silent --pem -out config/certs/ca.zip;
+          unzip config/certs/ca.zip -d config/certs;
+        fi;
+        if [ ! -f config/certs/certs.zip ]; then
+          echo "Creating certs";
+          echo -ne \
+          "instances:\n"\
+          "  - name: es01\n"\
+          "    dns:\n"\
+          "      - es01\n"\
+          "      - localhost\n"\
+          "    ip:\n"\
+          "      - 127.0.0.1\n"\
+          "  - name: kibana\n"\
+          "    dns:\n"\
+          "      - kibana\n"\
+          "      - localhost\n"\
+          "    ip:\n"\
+          "      - 127.0.0.1\n"\
+          > config/certs/instances.yml;
+          bin/elasticsearch-certutil cert --silent --pem -out config/certs/certs.zip --in config/certs/instances.yml --ca-cert config/certs/ca/ca.crt --ca-key config/certs/ca/ca.key;
+          unzip config/certs/certs.zip -d config/certs;
+        fi;
+        echo "Setting file permissions"
+        chown -R root:root config/certs;
+        find . -type d -exec chmod 750 \{\} \;;
+        find . -type f -exec chmod 640 \{\} \;;
+        echo "Waiting for Elasticsearch availability";
+        until curl -s --cacert config/certs/ca/ca.crt https://es01:9200 | grep -q "missing authentication credentials"; do sleep 30; done;
+        echo "Setting kibana_system password";
+        until curl -s -X POST --cacert config/certs/ca/ca.crt -u "elastic:${ELASTIC_PASSWORD}" -H "Content-Type: application/json" https://es01:9200/_security/user/kibana_system/_password -d "{\"password\":\"${KIBANA_PASSWORD}\"}" | grep -q "^{}"; do sleep 10; done;
+        echo "All done!";
+      '
+    healthcheck:
+      test: ["CMD-SHELL", "[ -f config/certs/es01/es01.crt ]"]
+      interval: 1s
+      timeout: 5s
+      retries: 120
+
+  es01:
+    depends_on:
+      elastic_setup:
+        condition: service_healthy
+    image: docker.elastic.co/elasticsearch/elasticsearch:${STACK_VERSION}
+    networks:
+      - redisn
+    labels:
+      co.elastic.logs/module: elasticsearch
+    volumes:
+      - certs:/usr/share/elasticsearch/config/certs
+      - esdata01:/usr/share/elasticsearch/data
+    ports:
+      - ${ES_PORT}:9200
+    environment:
+      - node.name=es01
+      - cluster.name=docker-cluster
+      - discovery.type=single-node
+      - bootstrap.memory_lock=true
+      - xpack.security.enabled=false
+      - xpack.security.http.ssl.enabled=false
+      - xpack.security.transport.ssl.enabled=false
+    mem_limit: ${ES_MEM_LIMIT}
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "curl -s http://localhost:9200 | grep -q 'You Know, for Search'",
+        ]
+      interval: 10s
+      timeout: 10s
+      retries: 120
+
+  kibana:
+    depends_on:
+      es01:
+        condition: service_healthy
+    image: docker.elastic.co/kibana/kibana:${STACK_VERSION}
+    networks:
+      - redisn
+    labels:
+      co.elastic.logs/module: kibana
+    volumes:
+      - certs:/usr/share/kibana/config/certs
+      - kibanadata:/usr/share/kibana/data
+    ports:
+      - ${KIBANA_PORT}:5601
+    environment:
+      - SERVERNAME=kibana
+      - ELASTICSEARCH_HOSTS=http://es01:9200
+      - XPACK_SECURITY_ENABLED=false
+    mem_limit: ${KB_MEM_LIMIT}
+    restart: unless-stopped
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "curl -s http://localhost:5601 | grep -q 'kibana redi pal mambo'",
+        ]
+      interval: 10s
+      timeout: 10s
+      retries: 120
+
+  csv_loader_elastic:
+    build: ./csv-loader-elastic
+    container_name: csv_loader_elastic
+    networks:
+      - redisn
+    depends_on:
+      - kibana
+      - es01
+    volumes:
+      - ./data:/data # para consumir los csv
+    environment:
+      - ES_HOST=es01
+      - ES_PORT=9200
+      - ES_INDEX_1=raw_data
+      - ES_INDEX_2=processed_data
+      - CSV_PATH_1=/data/datos_clean.csv
+      - CSV_PATH_2=/data/processed_data.csv/part-r-00000
+    restart: "no"
 
 volumes:
-  redis_data_1: # Volumen persistente para Redis
+  redis_data_1:
     driver: local
-  redis-insight: # Volumen para RedisInsight
+  redis-insight:
+  # todo de aquí para abajo es parte de elastic - desde la docu
+  certs:
+    driver: local
+  esdata01:
+    driver: local
+  kibanadata:
+    driver: local
+  metricbeatdata01:
+    driver: local
+  filebeatdata01:
+    driver: local
+  logstashdata01:
+    driver: local

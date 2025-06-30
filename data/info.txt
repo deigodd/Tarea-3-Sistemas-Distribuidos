@@ -1,1 +1,1 @@
-esta carpeta solo es para almacenar el csv que después lo consume el hadoop
+esta carpeta solo es para almacenar el csv que después lo consume el hadoop y ahora el elastic y demás
