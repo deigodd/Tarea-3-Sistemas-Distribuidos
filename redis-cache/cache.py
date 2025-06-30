@@ -10,7 +10,6 @@ INDEX_NAME = "processed_data"
 
 def consultar_y_cachear():
     try:
-        # 1. Agregación: tipo más frecuente por ciudad
         agg_query = {
             "size": 0,
             "aggs": {
@@ -50,25 +49,23 @@ def consultar_y_cachear():
                         ]
                     }
                 },
-                "size": 100
+                "size": 1 
             }
 
             result = es.search(index=INDEX_NAME, body=search_body)
 
-            for hit in result['hits']['hits']:
+            if result['hits']['hits']:
+                hit = result['hits']['hits'][0]  
                 doc_id = hit['_id']
                 source = hit['_source']
                 source['extra_payload'] = large_text
 
-                # 👇 Imprimir solo el primer documento antes de subir al cache
-                if total == 0:
-                    print(f"\n📦 Subiendo al cache [alert:{doc_id}]:")
-                    print(json.dumps(source, indent=2, ensure_ascii=False))  # Imprime con indentación
+                print(f"\n📦 Subiendo al cache [alert:{doc_id}]:")
+                print(json.dumps(source, indent=2, ensure_ascii=False))  
 
                 redis_client.set(f"alert:{doc_id}", json.dumps(source))
-                total += 1
-
-        print(f"\n✅ Total de documentos cacheados: {total}")
+                print("✅ Documento cacheado exitosamente.")
+                break
 
     except Exception as e:
         print(f"❌ Error en la consulta o cacheo: {e}")
